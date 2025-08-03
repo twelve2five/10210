@@ -58,8 +58,8 @@ sudo usermod -aG docker $USER
 ### 2. Clone the Repository
 
 ```bash
-git clone <your-github-repo-url>
-cd whatsapp-lead-agent
+git clone https://github.com/twelve2five/10210.git
+cd 10210
 ```
 
 ### 3. Configure Environment (Optional)
@@ -264,8 +264,8 @@ whatsapp-lead-agent/
    sudo sh get-docker.sh
    
    # Clone repository
-   git clone <your-repo>
-   cd whatsapp-lead-agent
+   git clone https://github.com/twelve2five/10210.git
+   cd 10210
    
    # Start services
    docker-compose up -d
@@ -303,7 +303,7 @@ This tool is for legitimate business use only. Users are responsible for complyi
 
 ## 🆘 Support
 
-- Check the [Issues](https://github.com/yourusername/whatsapp-lead-agent/issues) section
+- Check the [Issues](https://github.com/twelve2five/10210/issues) section
 - Review Docker and WAHA logs
 - Ensure you're using the latest version
 

@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # WAHA (WhatsApp HTTP API) Server
+  waha:
+    image: devlikeapro/waha-plus:latest
+    container_name: waha-server
+    restart: unless-stopped
+    ports:
+      - "4500:3000"
+    environment:
+      # WAHA Configuration
+      - WAHA_PRINT_QR=false
+      - WAHA_LOG_LEVEL=info
+      
+      # Security (uncomment and set secure values for production)
+      # - WAHA_API_KEY=your-secure-api-key-here
+      # - WAHA_API_KEY_HEADER=X-API-Key
+      
+      # Session storage
+      - WAHA_SESSION_STORE_ENABLED=true
+      - WAHA_SESSION_STORE_PATH=/app/sessions
+      
+      # Webhooks (optional)
+      # - WAHA_WEBHOOK_URL=http://whatsapp-agent:8000/webhook
+      # - WAHA_WEBHOOK_EVENTS=message,session.status
+      
+      # File storage
+      - WAHA_FILES_MIMETYPES=audio,image,video,document
+      - WAHA_FILES_LIFETIME=180
+      
+    volumes:
+      # Persist session data
+      - waha_sessions:/app/sessions
+      - waha_files:/app/files
+    
+    networks:
+      - whatsapp-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # WhatsApp Agent Dashboard
+  whatsapp-agent:
+    build: .
+    container_name: whatsapp-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Application settings
+      - ENVIRONMENT=production
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
+      - LOG_LEVEL=info
+      
+      # WAHA connection
+      - WAHA_BASE_URL=http://waha:3000
+      # - WAHA_API_KEY=your-secure-api-key-here  # Must match WAHA_API_KEY above
+      
+      # Security settings
+      - ENABLE_CORS=true
+      - CORS_ORIGINS=["http://localhost:8000"]
+      
+      # Feature flags
+      - ENABLE_FILE_UPLOAD=true
+      - ENABLE_SCREENSHOTS=true
+      - ENABLE_GROUP_MANAGEMENT=true
+      - ENABLE_CONTACT_MANAGEMENT=true
+      
+      # File upload settings
+      - MAX_UPLOAD_SIZE=52428800  # 50MB
+      
+      # Rate limiting
+      - ENABLE_RATE_LIMITING=true
+      - RATE_LIMIT_PER_MINUTE=60
+      
+    volumes:
+      # Persist uploads and logs
+      - agent_uploads:/app/static/uploads
+      - agent_logs:/app/logs
+      - agent_backups:/app/backups
+    
+    depends_on:
+      waha:
+        condition: service_healthy
+    
+    networks:
+      - whatsapp-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # WAHA persistent data
+  waha_sessions:
+    driver: local
+  waha_files:
+    driver: local
+  
+  # WhatsApp Agent persistent data
+  agent_uploads:
+    driver: local
+  agent_logs:
+    driver: local
+  agent_backups:
+    driver: local
+
+networks:
+  whatsapp-network:
+    driver: bridge
+    name: whatsapp-network

@@ -240,6 +240,8 @@ class WarmerContact(Base):
     contact_phone = Column(String(20), nullable=False)
     contact_name = Column(String(255))
     saved_at = Column(DateTime, default=datetime.utcnow)
+    saved_to_whatsapp = Column(Boolean, default=False)
+    whatsapp_saved_at = Column(DateTime)
     
     # Relationships
     warmer_session = relationship("WarmerSession", back_populates="contacts")

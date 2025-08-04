@@ -381,6 +381,14 @@ class WAHAClient:
         response = self._make_request("GET", f"/api/contacts/all?session={session}")
         return response.json()
     
+    def create_or_update_contact(self, session: str, chat_id: str, name: str) -> Dict:
+        """Create or update contact"""
+        payload = {
+            "name": name
+        }
+        response = self._make_request("PUT", f"/api/{session}/contacts/{chat_id}", json=payload)
+        return response.json()
+    
     def check_number_exists(self, session: str, phone: str) -> Dict:
         """Check if number exists on WhatsApp"""
         response = self._make_request("GET", f"/api/contacts/check-exists?session={session}&phone={phone}")

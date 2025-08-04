@@ -352,6 +352,15 @@ class WarmerEngine:
                 else:
                     message_id = str(message_id)
                 
+                # Save contact to WhatsApp after first message
+                recipient_name = recipient_info.get(recipient, {}).get("name", recipient)
+                await self.contact_manager.save_contact_after_message(
+                    session_name=sender,
+                    chat_id=chat_id,
+                    contact_name=recipient_name,
+                    warmer_session_id=warmer_session_id
+                )
+                
                 # Save conversation
                 await self.orchestrator.save_conversation(
                     warmer_session_id,

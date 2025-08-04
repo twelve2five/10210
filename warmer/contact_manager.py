@@ -5,6 +5,7 @@ Handles saving contacts between sessions
 
 import logging
 from typing import List, Dict, Optional, Tuple, Any
+from datetime import datetime
 from sqlalchemy.orm import Session
 from database.connection import get_db
 from warmer.models import WarmerContact, WarmerSession
@@ -179,10 +180,9 @@ class ContactManager:
                         "already_saved": True
                     }
             
-            # Save contact via WAHA API
-            # WAHA doesn't have a direct save contact endpoint in the docs
-            # We'll need to interact with the contact through messaging
-            # For now, we'll just record it in our database
+            # Note: Contact will be saved to WhatsApp when first message is sent
+            # The WAHA API requires an active chat to save contact
+            # See save_contact_after_message() method
             
             # Save to database
             with get_db() as db:
@@ -207,6 +207,76 @@ class ContactManager:
             return {
                 "success": False,
                 "error": error_msg
+            }
+    
+    async def save_contact_after_message(
+        self,
+        session_name: str,
+        chat_id: str,
+        contact_name: str,
+        warmer_session_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Save contact to WhatsApp after sending first message"""
+        try:
+            # Extract phone number from chat_id
+            contact_phone = chat_id.replace("@c.us", "")
+            
+            # Check if already saved to WhatsApp
+            if warmer_session_id:
+                with get_db() as db:
+                    existing = db.query(WarmerContact).filter(
+                        WarmerContact.warmer_session_id == warmer_session_id,
+                        WarmerContact.session_name == session_name,
+                        WarmerContact.contact_phone == contact_phone,
+                        WarmerContact.saved_to_whatsapp == True
+                    ).first()
+                    
+                    if existing:
+                        self.logger.info(f"Contact {contact_name} already saved to WhatsApp")
+                        return {
+                            "success": True,
+                            "message": "Contact already saved to WhatsApp",
+                            "already_saved": True
+                        }
+            
+            # Use WAHA API to save contact (requires active chat)
+            result = self.waha.create_or_update_contact(
+                session=session_name,
+                chat_id=chat_id,
+                name=contact_name
+            )
+            
+            if result:
+                # Update database to mark as saved to WhatsApp
+                if warmer_session_id:
+                    with get_db() as db:
+                        contact = db.query(WarmerContact).filter(
+                            WarmerContact.warmer_session_id == warmer_session_id,
+                            WarmerContact.session_name == session_name,
+                            WarmerContact.contact_phone == contact_phone
+                        ).first()
+                        
+                        if contact:
+                            contact.saved_to_whatsapp = True
+                            contact.whatsapp_saved_at = datetime.utcnow()
+                            db.commit()
+                
+                self.logger.info(f"✓ Contact {contact_name} saved to WhatsApp in session {session_name}")
+                return {
+                    "success": True,
+                    "message": f"Contact saved to WhatsApp"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Failed to save contact to WhatsApp"
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Failed to save contact to WhatsApp: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
             }
     
     async def check_contacts_saved(self, warmer_session_id: int) -> Dict[str, Any]:

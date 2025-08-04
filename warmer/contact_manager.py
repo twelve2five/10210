@@ -41,6 +41,8 @@ class ContactManager:
             
             results = {
                 "total_contacts_saved": 0,
+                "total_already_saved": 0,
+                "total_newly_saved": 0,
                 "errors": [],
                 "details": []
             }
@@ -55,37 +57,66 @@ class ContactManager:
                         continue
                     
                     # Save session2's contact in session1
+                    session2_info = session_phones.get(session2, {})
+                    self.logger.info(f"Saving {session2}'s contact ({session2_info.get('name', 'Unknown')}) in {session1}...")
                     result1 = await self._save_contact(
                         warmer_session_id,
                         session1,
-                        session_phones.get(session2, {})
+                        session2_info
                     )
                     
                     # Save session1's contact in session2
+                    session1_info = session_phones.get(session1, {})
+                    self.logger.info(f"Saving {session1}'s contact ({session1_info.get('name', 'Unknown')}) in {session2}...")
                     result2 = await self._save_contact(
                         warmer_session_id,
                         session2,
-                        session_phones.get(session1, {})
+                        session1_info
                     )
                     
+                    # Process result1
                     if result1["success"]:
                         results["total_contacts_saved"] += 1
+                        if result1.get("already_saved"):
+                            results["total_already_saved"] += 1
+                            self.logger.info(f"✓ {session2}'s contact was already saved in {session1}")
+                        else:
+                            results["total_newly_saved"] += 1
+                            self.logger.info(f"✓ {session2}'s contact has been saved in {session1}")
                     else:
-                        results["errors"].append(result1["error"])
+                        results["errors"].append(result1.get("error", "Unknown error"))
+                        self.logger.error(f"✗ Failed to save {session2}'s contact in {session1}: {result1.get('error', 'Unknown error')}")
                     
+                    # Process result2
                     if result2["success"]:
                         results["total_contacts_saved"] += 1
+                        if result2.get("already_saved"):
+                            results["total_already_saved"] += 1
+                            self.logger.info(f"✓ {session1}'s contact was already saved in {session2}")
+                        else:
+                            results["total_newly_saved"] += 1
+                            self.logger.info(f"✓ {session1}'s contact has been saved in {session2}")
                     else:
-                        results["errors"].append(result2["error"])
+                        results["errors"].append(result2.get("error", "Unknown error"))
+                        self.logger.error(f"✗ Failed to save {session1}'s contact in {session2}: {result2.get('error', 'Unknown error')}")
                     
                     results["details"].append({
                         "session1": session1,
                         "session2": session2,
                         "saved_in_session1": result1["success"],
-                        "saved_in_session2": result2["success"]
+                        "saved_in_session2": result2["success"],
+                        "session1_already_saved": result1.get("already_saved", False),
+                        "session2_already_saved": result2.get("already_saved", False)
                     })
             
-            self.logger.info(f"Saved {results['total_contacts_saved']} contacts for warmer {warmer_session_id}")
+            # Log summary
+            self.logger.info(f"\n=== Contact Saving Summary ===")
+            self.logger.info(f"Total contacts processed: {results['total_contacts_saved']}")
+            self.logger.info(f"Already saved: {results['total_already_saved']}")
+            self.logger.info(f"Newly saved: {results['total_newly_saved']}")
+            if results['errors']:
+                self.logger.info(f"Failed: {len(results['errors'])}")
+            self.logger.info(f"==============================\n")
             return results
             
         except Exception as e:
@@ -144,7 +175,8 @@ class ContactManager:
                 if existing:
                     return {
                         "success": True,
-                        "message": "Contact already saved"
+                        "message": "Contact already saved",
+                        "already_saved": True
                     }
             
             # Save contact via WAHA API
@@ -165,7 +197,8 @@ class ContactManager:
             
             return {
                 "success": True,
-                "message": f"Contact {name} ({phone}) saved in {session_name}"
+                "message": f"Contact {name} ({phone}) saved in {session_name}",
+                "already_saved": False
             }
             
         except Exception as e:

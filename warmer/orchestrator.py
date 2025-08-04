@@ -6,6 +6,7 @@ Manages conversation flow and generates messages using LiteLLM
 import logging
 import random
 import asyncio
+import os
 from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
@@ -26,10 +27,12 @@ except ImportError:
 class ConversationOrchestrator:
     """Orchestrates conversations between warmer sessions"""
     
-    def __init__(self, ollama_model: str = "llama2", ollama_api_base: str = "http://localhost:11434"):
+    def __init__(self, ollama_model: str = None, ollama_api_base: str = None):
         self.logger = logger
-        self.ollama_model = f"ollama/{ollama_model}"
-        self.ollama_api_base = ollama_api_base
+        # Use environment variables with fallback to defaults
+        model = ollama_model or os.getenv("OLLAMA_MODEL", "gemma3:1b")
+        self.ollama_model = f"ollama/{model}"
+        self.ollama_api_base = ollama_api_base or os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
         self.litellm_available = LITELLM_AVAILABLE
         
         # Conversation topics for variety

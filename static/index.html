@@ -793,6 +793,10 @@
                                 <button class="btn btn-success btn-sm mb-3" onclick="addModalSample()">
                                     ➕ Add Sample
                                 </button>
+                                <button class="btn btn-info btn-sm mb-3 ms-2" onclick="generateSimilarTemplates()" 
+                                        title="Generate similar templates using AI">
+                                    <i class="bi bi-magic"></i> Generate Similar
+                                </button>
                                 
                                 <!-- CSV Samples Option -->
                                 <div class="mt-3">
@@ -1036,6 +1040,59 @@
             </div>
             <div class="toast-body" id="toast-message">
                 <!-- Toast message will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Restart Campaign Modal -->
+    <div class="modal fade" id="restartCampaignModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-arrow-clockwise me-2"></i>Restart Campaign
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>Campaign Details:</strong>
+                        <div id="restart-campaign-info" class="mt-2"></div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Start from row:</label>
+                            <input type="number" class="form-control" id="restart-start-row" min="1" value="1">
+                            <small class="text-muted">First row to process (1 = first row after header)</small>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Stop at row (optional):</label>
+                            <input type="number" class="form-control" id="restart-stop-row" min="1" placeholder="Leave empty for all rows">
+                            <small class="text-muted">Last row to process (leave empty to process until end)</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="restart-skip-processed">
+                        <label class="form-check-label" for="restart-skip-processed">
+                            Skip already processed rows
+                        </label>
+                        <small class="text-muted d-block">Check this to only send to rows that weren't processed in the previous run</small>
+                    </div>
+                    
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <strong>Note:</strong> This will create a new campaign instance using the same file and settings.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="restartCampaign()">
+                        <i class="bi bi-arrow-clockwise me-2"></i>Restart Campaign
+                    </button>
+                </div>
             </div>
         </div>
     </div>

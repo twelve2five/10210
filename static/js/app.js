@@ -85,6 +85,97 @@ class WhatsAppAgent {
         }
     }
     
+    async showRestartCampaignModal(campaignId) {
+        try {
+            // Fetch campaign details
+            const response = await this.apiCall(`/api/campaigns/${campaignId}`);
+            const campaign = response.data || response;
+            
+            // Store campaign ID for restart
+            this.restartCampaignId = campaignId;
+            
+            // Update modal with campaign info
+            const infoDiv = document.getElementById('restart-campaign-info');
+            infoDiv.innerHTML = `
+                <div><strong>Name:</strong> ${campaign.name}</div>
+                <div><strong>Total Rows:</strong> ${campaign.total_rows}</div>
+                <div><strong>Processed:</strong> ${campaign.processed_rows}</div>
+                <div><strong>Success:</strong> ${campaign.success_count}</div>
+                <div><strong>Failed:</strong> ${(campaign.processed_rows || 0) - (campaign.success_count || 0)}</div>
+            `;
+            
+            // Set default starting row (next unprocessed row)
+            const nextRow = (campaign.processed_rows || 0) + 1;
+            document.getElementById('restart-start-row').value = nextRow;
+            document.getElementById('restart-start-row').max = campaign.total_rows;
+            
+            // Set stop row max value
+            document.getElementById('restart-stop-row').max = campaign.total_rows;
+            document.getElementById('restart-stop-row').placeholder = `Leave empty for all rows (max: ${campaign.total_rows})`;
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('restartCampaignModal'));
+            modal.show();
+            
+        } catch (error) {
+            console.error('Error loading campaign for restart:', error);
+            this.showToast('Failed to load campaign details', 'error');
+        }
+    }
+    
+    async restartCampaign() {
+        const campaignId = this.restartCampaignId;
+        if (!campaignId) return;
+        
+        const startRow = parseInt(document.getElementById('restart-start-row').value);
+        const stopRow = document.getElementById('restart-stop-row').value ? 
+                       parseInt(document.getElementById('restart-stop-row').value) : null;
+        const skipProcessed = document.getElementById('restart-skip-processed').checked;
+        
+        if (!startRow || startRow < 1) {
+            this.showToast('Please enter a valid starting row number', 'warning');
+            return;
+        }
+        
+        if (stopRow && stopRow < startRow) {
+            this.showToast('Stop row must be greater than or equal to start row', 'warning');
+            return;
+        }
+        
+        try {
+            // Call restart endpoint
+            const response = await this.apiCall(`/api/campaigns/${campaignId}/restart`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    start_row: startRow,
+                    stop_row: stopRow,
+                    skip_processed: skipProcessed
+                })
+            });
+            
+            if (response.success) {
+                this.showToast('Campaign restarted successfully', 'success');
+                
+                // Close modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('restartCampaignModal'));
+                modal.hide();
+                
+                // Reload campaigns
+                this.loadCampaigns();
+                
+                // Select the new campaign
+                if (response.new_campaign_id) {
+                    setTimeout(() => {
+                        this.selectCampaign(response.new_campaign_id);
+                    }, 500);
+                }
+            }
+        } catch (error) {
+            console.error('Error restarting campaign:', error);
+            this.showToast('Failed to restart campaign: ' + (error.message || 'Unknown error'), 'error');
+        }
+    }
+    
     // ==================== CAMPAIGN WIZARD ====================
     
     currentWizardStep = 1;
@@ -488,6 +579,59 @@ class WhatsAppAgent {
         button.closest('.sample-input').remove();
         this.updateModalSampleNumbers();
         this.updateWizardButtons(); // Update button state after removal
+    }
+    
+    async generateSimilarTemplates() {
+        const container = document.getElementById('modalSamplesContainer');
+        if (!container) return;
+        
+        // Get the first template
+        const firstTemplate = container.querySelector('.modal-sample-text');
+        if (!firstTemplate || !firstTemplate.value.trim()) {
+            this.showToast('Please enter at least one template first', 'warning');
+            return;
+        }
+        
+        // Show loading state
+        const generateBtn = document.querySelector('[onclick="generateSimilarTemplates()"]');
+        const originalHtml = generateBtn.innerHTML;
+        generateBtn.disabled = true;
+        generateBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Generating...';
+        
+        try {
+            // Call the backend API
+            const response = await this.apiCall('/api/generate-templates', {
+                method: 'POST',
+                body: JSON.stringify({
+                    template: firstTemplate.value.trim(),
+                    count: 3  // Generate 3 variations
+                })
+            });
+            
+            if (response.success && response.variations) {
+                // Add the generated variations
+                response.variations.forEach(variation => {
+                    this.addModalSample();
+                    // Get the last added textarea
+                    const textareas = container.querySelectorAll('.modal-sample-text');
+                    const lastTextarea = textareas[textareas.length - 1];
+                    lastTextarea.value = variation;
+                });
+                
+                this.showToast(`Generated ${response.variations.length} template variations`, 'success');
+            } else {
+                this.showToast('Failed to generate templates', 'error');
+            }
+        } catch (error) {
+            console.error('Error generating templates:', error);
+            this.showToast('Error generating templates: ' + error.message, 'error');
+        } finally {
+            // Restore button state
+            if (generateBtn) {
+                generateBtn.disabled = false;
+                generateBtn.innerHTML = originalHtml;
+            }
+        }
     }
     
     updateModalSampleNumbers() {
@@ -1180,6 +1324,17 @@ class WhatsAppAgent {
                     </button>
                 `;
             case 'completed':
+                return `
+                    <button class="btn btn-primary" onclick="showRestartCampaignModal('${campaign.id}')">
+                        <i class="bi bi-arrow-clockwise"></i> Restart Campaign
+                    </button>
+                    <button class="btn btn-outline-info" onclick="viewCampaignReport('${campaign.id}')">
+                        <i class="bi bi-file-text"></i> View Report
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="deleteCampaign('${campaign.id}')">
+                        <i class="bi bi-trash"></i> Delete
+                    </button>
+                `;
             case 'failed':
             case 'cancelled':
                 return `
@@ -1825,17 +1980,20 @@ class WhatsAppAgent {
         }
 
         try {
-            const result = await this.apiCall(`/api/groups/${session}`);
+            // Load lightweight data first (no participants)
+            const result = await this.apiCall(`/api/groups/${session}?lightweight=true`);
             if (result.success) {
-                // The groups already have participants in groupMetadata.participants
-                const groupsWithFixedStructure = result.data.map(group => ({
+                // Store groups data for later use
+                this.groupsData = result.data.map(group => ({
                     id: group.id?._serialized || group.id,
-                    name: group.name || group.groupMetadata?.subject || 'Unnamed Group',
-                    participants: group.groupMetadata?.participants || [],
+                    name: group.name || 'Unnamed Group',
                     isGroup: group.isGroup,
-                    timestamp: group.timestamp
+                    timestamp: group.timestamp,
+                    participantsLoaded: false,
+                    participants: null,
+                    participantCount: null
                 }));
-                this.displayGroups(groupsWithFixedStructure);
+                this.displayGroups(this.groupsData);
             }
         } catch (error) {
             this.showToast('Failed to load groups', 'error');
@@ -1854,12 +2012,14 @@ class WhatsAppAgent {
         
         emptyState.style.display = 'none';
         container.innerHTML = groups.map(group => {
-            // Fix: participants might be an array or might need to be fetched
-            const participantCount = group.participants?.length || group.participantCount || 0;
+            // Show loading state if participants not loaded yet
+            const participantCount = group.participantsLoaded 
+                ? (group.participantCount || group.participants?.length || 0)
+                : 'Loading...';
             
             return `
                 <div class="col-md-6 col-lg-4 mb-3">
-                    <div class="card group-card">
+                    <div class="card group-card" onclick="app.loadGroupDetails('${group.id}')" style="cursor: pointer;">
                         <div class="card-body">
                             <div class="d-flex align-items-center mb-3">
                                 <div class="group-avatar me-3">
@@ -1867,24 +2027,26 @@ class WhatsAppAgent {
                                 </div>
                                 <div class="flex-grow-1">
                                     <h6 class="card-title mb-1">${group.name}</h6>
-                                    <small class="text-muted">${participantCount} members</small>
+                                    <small class="text-muted" id="group-count-${group.id}">
+                                        ${participantCount} ${typeof participantCount === 'number' ? 'members' : ''}
+                                    </small>
                                 </div>
                             </div>
                             
                             <div class="d-flex justify-content-between">
-                                <button class="btn btn-sm btn-primary" onclick="app.openChat('${group.id}', '${group.name}')">
+                                <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); app.openChat('${group.id}', '${group.name}')">
                                     <i class="bi bi-chat me-1"></i>Open
                                 </button>
                                 <div class="dropdown">
-                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" onclick="event.stopPropagation()">
                                         <i class="bi bi-three-dots"></i>
                                     </button>
                                     <ul class="dropdown-menu">
-                                        <li><a class="dropdown-item" href="#" onclick="app.exportGroupParticipants('${group.id}', '${group.name}')">
+                                        <li><a class="dropdown-item ${!group.participantsLoaded ? 'disabled' : ''}" href="#" onclick="event.stopPropagation(); app.exportGroupParticipants('${group.id}', '${group.name}')">
                                             <i class="bi bi-download me-2"></i>Export Participants
                                         </a></li>
                                         <li><hr class="dropdown-divider"></li>
-                                        <li><a class="dropdown-item" href="#" onclick="app.leaveGroup('${group.id}')">
+                                        <li><a class="dropdown-item" href="#" onclick="event.stopPropagation(); app.leaveGroup('${group.id}')">
                                             <i class="bi bi-box-arrow-right me-2"></i>Leave Group
                                         </a></li>
                                         <li><a class="dropdown-item text-danger" href="#" onclick="app.deleteGroup('${group.id}')">
@@ -1958,6 +2120,56 @@ class WhatsAppAgent {
             this.loadGroups();
         } catch (error) {
             this.showToast('Failed to delete group', 'error');
+        }
+    }
+    
+    async loadGroupDetails(groupId) {
+        const sessionSelect = document.getElementById('groups-session-select');
+        const session = sessionSelect.value;
+        
+        if (!session) return;
+        
+        // Find the group in our stored data
+        const groupIndex = this.groupsData?.findIndex(g => g.id === groupId);
+        if (groupIndex === -1) return;
+        
+        const group = this.groupsData[groupIndex];
+        
+        // If already loaded, don't reload
+        if (group.participantsLoaded) return;
+        
+        try {
+            // Update UI to show loading
+            const countElement = document.getElementById(`group-count-${groupId}`);
+            if (countElement) {
+                countElement.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Loading...';
+            }
+            
+            // Fetch full group details
+            const result = await this.apiCall(`/api/groups/${session}/${groupId}`);
+            if (result.success && result.data) {
+                // Update stored data
+                group.participants = result.data.groupMetadata?.participants || [];
+                group.participantCount = group.participants.length;
+                group.participantsLoaded = true;
+                
+                // Update UI
+                if (countElement) {
+                    countElement.textContent = `${group.participantCount} members`;
+                }
+                
+                // Enable export button
+                const exportButton = document.querySelector(`[onclick*="exportGroupParticipants('${groupId}'"]`);
+                if (exportButton) {
+                    exportButton.classList.remove('disabled');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load group details:', error);
+            const countElement = document.getElementById(`group-count-${groupId}`);
+            if (countElement) {
+                countElement.innerHTML = '<span class="text-danger">Failed to load</span>';
+            }
         }
     }
     
@@ -2710,6 +2922,7 @@ window.loadGroups = () => app.loadGroups();
 window.filterContacts = () => app.filterContacts();
 window.checkNumber = () => app.checkNumber();
 window.createGroup = () => app.createGroup();
+window.loadGroupDetails = (groupId) => app.loadGroupDetails(groupId);
 window.exportGroupParticipants = (groupId, groupName) => app.exportGroupParticipants(groupId, groupName);
 window.sendTextMessage = () => app.sendTextMessage();
 window.sendFileMessage = () => app.sendFileMessage();
@@ -2725,6 +2938,8 @@ window.resumeCampaign = (id) => app.resumeCampaign(id);
 window.stopCampaign = (id) => app.stopCampaign(id);
 window.deleteCampaign = (id) => app.deleteCampaign(id);
 window.viewCampaignReport = (id) => app.showToast('Campaign report feature coming soon!', 'info');
+window.showRestartCampaignModal = (id) => app.showRestartCampaignModal(id);
+window.restartCampaign = () => app.restartCampaign();
 
 // Modal Campaign Wizard Functions
 window.modalNextStep = () => app.modalNextStep();
@@ -2733,6 +2948,7 @@ window.handleModalFileUpload = () => app.handleModalFileUpload();
 window.toggleModalMessageMode = () => app.toggleModalMessageMode();
 window.addModalSample = () => app.addModalSample();
 window.removeModalSample = (btn) => app.removeModalSample(btn);
+window.generateSimilarTemplates = () => app.generateSimilarTemplates();
 window.launchModalCampaign = () => app.launchModalCampaign();
 window.saveModalCampaignDraft = () => app.saveModalCampaignDraft();
 window.previewModalTemplate = () => app.previewModalTemplate();

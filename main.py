@@ -391,11 +391,26 @@ async def unblock_contact(contact_action: ContactAction):
 # ==================== GROUPS ====================
 
 @app.get("/api/groups/{session}")
-async def get_groups(session: str):
-    """Get all groups"""
+async def get_groups(session: str, lightweight: bool = True):
+    """Get all groups - lightweight by default (no participants)"""
     try:
         groups = waha.get_groups(session)
-        return {"success": True, "data": groups}
+        
+        if lightweight:
+            # Return only essential group info without participants
+            lightweight_groups = []
+            for group in groups:
+                lightweight_groups.append({
+                    "id": group.get("id"),
+                    "name": group.get("name") or group.get("groupMetadata", {}).get("subject", "Unnamed Group"),
+                    "isGroup": group.get("isGroup", True),
+                    "timestamp": group.get("timestamp"),
+                    # Don't include participants or other heavy metadata
+                })
+            return {"success": True, "data": lightweight_groups, "lightweight": True}
+        else:
+            # Return full group data (old behavior)
+            return {"success": True, "data": groups, "lightweight": False}
     except Exception as e:
         logger.error(f"Error getting groups: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -519,6 +534,71 @@ if PHASE_2_ENABLED:
             logger.error(f"Error getting campaigns: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
     
+    # ==================== TEMPLATE GENERATION ====================
+    
+    @app.post("/api/generate-templates")
+    async def generate_similar_templates(request: dict):
+        """Generate similar message templates using LiteLLM/Ollama"""
+        try:
+            original_template = request.get("template", "")
+            count = request.get("count", 3)  # Number of variations to generate
+            
+            if not original_template:
+                raise HTTPException(status_code=400, detail="Template is required")
+            
+            # Import litellm
+            try:
+                from litellm import completion
+            except ImportError:
+                raise HTTPException(status_code=500, detail="LiteLLM not available")
+            
+            # Get Ollama configuration from environment
+            ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:1b")
+            ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+            
+            # Create prompt for generating variations
+            prompt = f"""Generate {count} variations of this WhatsApp message template. 
+Keep the same tone and purpose, but vary the wording and emojis.
+Use placeholder {{name}} for personalization where appropriate.
+Make each variation unique but maintaining the core message.
+
+Original template:
+{original_template}
+
+Generate exactly {count} variations, one per line:"""
+            
+            # Generate variations using LiteLLM
+            response = completion(
+                model=f"ollama/{ollama_model}",
+                messages=[{"role": "user", "content": prompt}],
+                api_base=ollama_api_base,
+                temperature=0.8,
+                max_tokens=500
+            )
+            
+            # Parse the response
+            generated_text = response.choices[0].message.content.strip()
+            variations = [line.strip() for line in generated_text.split('\n') if line.strip()]
+            
+            # Clean up variations (remove numbering if present)
+            cleaned_variations = []
+            for var in variations[:count]:
+                # Remove common numbering patterns like "1.", "1)", "1:"
+                import re
+                cleaned = re.sub(r'^[\d]+[\.\)\:]?\s*', '', var)
+                if cleaned and cleaned != original_template:
+                    cleaned_variations.append(cleaned)
+            
+            return {
+                "success": True,
+                "variations": cleaned_variations,
+                "model_used": f"ollama/{ollama_model}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating templates: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
     @app.post("/api/campaigns")
     async def create_campaign(campaign_data: CampaignCreate):
         """Create new campaign"""
@@ -593,6 +673,58 @@ if PHASE_2_ENABLED:
             raise
         except Exception as e:
             logger.error(f"Error stopping campaign {campaign_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.post("/api/campaigns/{campaign_id}/restart")
+    async def restart_campaign(campaign_id: int, restart_data: dict):
+        """Restart a completed campaign with new starting row"""
+        try:
+            start_row = restart_data.get("start_row", 1)
+            stop_row = restart_data.get("stop_row", None)
+            skip_processed = restart_data.get("skip_processed", False)
+            
+            # Get the original campaign
+            original = campaign_manager.get_campaign(campaign_id)
+            if not original:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            
+            if original.status != "COMPLETED":
+                raise HTTPException(status_code=400, detail="Only completed campaigns can be restarted")
+            
+            # Create a new campaign with same settings but different start/stop rows
+            new_campaign_data = CampaignCreate(
+                name=f"{original.name} (Restarted)",
+                session_name=original.session_name,
+                file_path=original.file_path,
+                message_mode=original.message_mode,
+                single_template=original.single_template,
+                message_samples=original.message_samples,
+                use_csv_samples=original.use_csv_samples,
+                delay_seconds=original.delay_seconds,
+                retry_attempts=original.retry_attempts,
+                max_daily_messages=original.max_daily_messages,
+                start_row=start_row,
+                end_row=stop_row,  # Add the stop row
+                skip_processed_rows=skip_processed
+            )
+            
+            # Create the new campaign
+            new_campaign = campaign_manager.create_campaign(new_campaign_data)
+            
+            # If skip_processed is True, copy processed rows from original campaign
+            if skip_processed and hasattr(campaign_manager, 'copy_processed_rows'):
+                campaign_manager.copy_processed_rows(campaign_id, new_campaign.id)
+            
+            return {
+                "success": True, 
+                "message": "Campaign restarted successfully",
+                "new_campaign_id": new_campaign.id
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error restarting campaign {campaign_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.delete("/api/campaigns/{campaign_id}")

@@ -130,7 +130,7 @@ class Campaign(Base):
         time_per_row = elapsed_time.total_seconds() / self.processed_rows
         estimated_remaining_seconds = remaining_rows * time_per_row
         
-        return datetime.utcnow() + datetime.timedelta(seconds=estimated_remaining_seconds)
+        return datetime.utcnow() + timedelta(seconds=estimated_remaining_seconds)
     
     def to_dict(self) -> Dict:
         """Convert campaign to dictionary"""

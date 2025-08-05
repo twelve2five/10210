@@ -25,7 +25,12 @@ class MessageProcessor:
     """Background message processor for campaign execution"""
     
     def __init__(self, waha_client: WAHAClient = None):
-        self.waha = waha_client or WAHAClient()
+        # Default WAHA client (for backward compatibility)
+        self.default_waha = waha_client or WAHAClient()
+        
+        # Isolated WAHA clients for each campaign
+        self.campaign_waha_clients = {}  # campaign_id -> WAHAClient
+        
         self.template_engine = MessageTemplateEngine()
         self.file_handler = FileHandler()
         self.validator = DataValidator()
@@ -34,15 +39,26 @@ class MessageProcessor:
         self.active_campaigns = {}  # campaign_id -> processing_task
         self.stop_flags = {}        # campaign_id -> stop_flag
         
+        # Lock for thread-safe operations
+        self._lock = asyncio.Lock()
+        
+    def _get_campaign_waha_client(self, campaign_id: int) -> WAHAClient:
+        """Get or create an isolated WAHA client for a campaign"""
+        if campaign_id not in self.campaign_waha_clients:
+            self.campaign_waha_clients[campaign_id] = WAHAClient()
+            logger.info(f"Created isolated WAHA client for campaign {campaign_id}")
+        return self.campaign_waha_clients[campaign_id]
+    
+    def _cleanup_campaign_waha_client(self, campaign_id: int):
+        """Clean up WAHA client for a campaign"""
+        if campaign_id in self.campaign_waha_clients:
+            del self.campaign_waha_clients[campaign_id]
+            logger.info(f"Cleaned up WAHA client for campaign {campaign_id}")
+    
     async def start_campaign_processing(self, campaign_id: int) -> bool:
         """Start processing a campaign in background"""
         try:
-            # Check if already running
-            if campaign_id in self.active_campaigns:
-                logger.warning(f"Campaign {campaign_id} is already being processed")
-                return False
-            
-            # Get campaign
+            # Get campaign first
             with get_db() as db:
                 campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
                 if not campaign:
@@ -53,12 +69,19 @@ class MessageProcessor:
                     logger.error(f"Campaign {campaign_id} is not in RUNNING status")
                     return False
             
-            # Create stop flag
-            self.stop_flags[campaign_id] = False
-            
-            # Start background task
-            task = asyncio.create_task(self._process_campaign(campaign_id))
-            self.active_campaigns[campaign_id] = task
+            # Use lock to ensure thread-safe operations
+            async with self._lock:
+                # Check if already running
+                if campaign_id in self.active_campaigns:
+                    logger.warning(f"Campaign {campaign_id} is already being processed")
+                    return False
+                
+                # Create stop flag
+                self.stop_flags[campaign_id] = False
+                
+                # Start background task
+                task = asyncio.create_task(self._process_campaign(campaign_id))
+                self.active_campaigns[campaign_id] = task
             
             logger.info(f"Started processing campaign {campaign_id}")
             return True
@@ -113,7 +136,7 @@ class MessageProcessor:
             
             # Check session availability early
             session_name = campaign.get('session_name', 'default')
-            if not await self._check_session_health(session_name):
+            if not await self._check_session_health(session_name, campaign_id):
                 validation_errors.append(f"WhatsApp session '{session_name}' is not available or not connected")
                 logger.error(f"Campaign {campaign_id}: Session '{session_name}' health check failed")
             
@@ -158,6 +181,9 @@ class MessageProcessor:
                 del self.active_campaigns[campaign_id]
             if campaign_id in self.stop_flags:
                 del self.stop_flags[campaign_id]
+            
+            # Clean up isolated WAHA client
+            self._cleanup_campaign_waha_client(campaign_id)
             
             logger.info(f"✅ Campaign processing finished: {campaign_id}")
     
@@ -283,13 +309,13 @@ class MessageProcessor:
             )
             
             # Check session health
-            if not await self._check_session_health(campaign["session_name"]):
+            if not await self._check_session_health(campaign["session_name"], campaign["id"]):
                 await self._update_delivery_status(delivery_id, DeliveryStatus.FAILED, "Session not available")
                 return
             
             # Send message
             send_result = await self._send_whatsapp_message(
-                campaign["session_name"], phone_number, final_message
+                campaign["id"], campaign["session_name"], phone_number, final_message
             )
             
             if send_result["success"]:
@@ -373,14 +399,17 @@ class MessageProcessor:
                 "final_message": None
             }
     
-    async def _send_whatsapp_message(self, session_name: str, phone_number: str, message: str) -> Dict[str, Any]:
+    async def _send_whatsapp_message(self, campaign_id: int, session_name: str, phone_number: str, message: str) -> Dict[str, Any]:
         """Send WhatsApp message via WAHA"""
         try:
             # Format chat ID (WhatsApp format: phone@c.us)
             chat_id = f"{phone_number}@c.us"
             
+            # Get isolated WAHA client for this campaign
+            waha_client = self._get_campaign_waha_client(campaign_id)
+            
             # Send message
-            result = self.waha.send_text(session_name, chat_id, message)
+            result = waha_client.send_text(session_name, chat_id, message)
             
             # Extract just the ID string from the response
             message_id = result.get("id") if isinstance(result.get("id"), str) else str(result.get("id", ""))
@@ -399,10 +428,12 @@ class MessageProcessor:
                 "message_id": None
             }
     
-    async def _check_session_health(self, session_name: str) -> bool:
+    async def _check_session_health(self, session_name: str, campaign_id: Optional[int] = None) -> bool:
         """Check if WhatsApp session is healthy and ready"""
         try:
-            sessions = self.waha.get_sessions()
+            # Use campaign-specific client if campaign_id provided, otherwise use default
+            waha_client = self._get_campaign_waha_client(campaign_id) if campaign_id else self.default_waha
+            sessions = waha_client.get_sessions()
             logger.debug(f"Available sessions: {[s.get('name') for s in sessions]}")
             
             for session in sessions:

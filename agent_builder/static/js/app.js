@@ -48,7 +48,12 @@ const api = {
     },
     
     async fetchTriggers() {
-        const response = await fetch('/api/triggers');
+        const response = await fetch('/api/triggers/flat');
+        return response.json();
+    },
+    
+    async fetchSessions() {
+        const response = await fetch('http://localhost:8000/api/sessions');
         return response.json();
     },
     
@@ -285,10 +290,11 @@ async function loadTriggers() {
         
         grid.innerHTML = triggers.map(trigger => `
             <div>
-                <input type="checkbox" id="trigger-${trigger.value}" value="${trigger.value}" 
-                    class="trigger-checkbox" onchange="toggleTrigger('${trigger.value}')">
-                <label for="trigger-${trigger.value}" class="trigger-label block border-2 border-gray-200 rounded-lg p-3 text-sm">
-                    ${trigger.name}
+                <input type="checkbox" id="trigger-${trigger.id}" value="${trigger.id}" 
+                    class="trigger-checkbox" onchange="toggleTrigger('${trigger.id}')">
+                <label for="trigger-${trigger.id}" class="trigger-label block border-2 border-gray-200 rounded-lg p-3 text-sm">
+                    <span class="text-lg">${trigger.icon}</span> ${trigger.name}
+                    <div class="text-xs text-gray-500 mt-1">${trigger.description}</div>
                 </label>
             </div>
         `).join('');
@@ -560,12 +566,16 @@ async function editAgent(id) {
         // Fill form
         document.querySelector('[name="name"]').value = agent.name;
         document.querySelector('[name="description"]').value = agent.description || '';
-        document.querySelector('[name="whatsapp_session"]').value = agent.whatsapp_session;
         document.querySelector('[name="model"]').value = agent.model;
         document.querySelector('[name="temperature"]').value = agent.temperature;
         document.querySelector('[name="root_instruction"]').value = agent.root_instruction || '';
         
         updateTemperatureValue(document.querySelector('[name="temperature"]'));
+        
+        // Set session value after sessions are loaded
+        setTimeout(() => {
+            document.querySelector('[name="whatsapp_session"]').value = agent.whatsapp_session;
+        }, 200);
         
         // Clear and set selections
         selectedTriggers.clear();
@@ -582,6 +592,7 @@ async function editAgent(id) {
         // Reload form elements
         await loadTriggers();
         await loadToolsForForm();
+        await loadSessions();
         
         // Check selected items
         selectedTriggers.forEach(t => {
@@ -610,12 +621,35 @@ async function editAgent(id) {
     }
 }
 
+// Load WhatsApp sessions
+async function loadSessions() {
+    try {
+        const sessions = await api.fetchSessions();
+        const select = document.getElementById('whatsapp-session-select');
+        
+        if (sessions && sessions.length > 0) {
+            select.innerHTML = sessions.map(session => 
+                `<option value="${session.name}" ${session.status === 'WORKING' ? 'selected' : ''}>
+                    ${session.name} (${session.status})
+                </option>`
+            ).join('');
+        } else {
+            select.innerHTML = '<option value="default">default</option>';
+        }
+    } catch (error) {
+        console.error('Failed to load sessions:', error);
+        // Fallback to default
+        document.getElementById('whatsapp-session-select').innerHTML = '<option value="default">default</option>';
+    }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
     // Load initial data
     loadAgents();
     loadTriggers();
     loadToolsForForm();
+    loadSessions();
     
     // Populate log agent select
     try {

@@ -109,6 +109,11 @@ class PhoneCheck(BaseModel):
     phone: str
     session: str
 
+class CampaignRestart(BaseModel):
+    start_row: int = 1
+    stop_row: Optional[int] = None
+    skip_processed: bool = False
+
 # ==================== STATIC ROUTES ====================
 
 @app.get("/", response_class=HTMLResponse)
@@ -676,20 +681,28 @@ Generate exactly {count} variations, one per line:"""
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.post("/api/campaigns/{campaign_id}/restart")
-    async def restart_campaign(campaign_id: int, restart_data: dict):
+    async def restart_campaign(campaign_id: int, restart_data: CampaignRestart):
         """Restart a completed campaign with new starting row"""
         try:
-            start_row = restart_data.get("start_row", 1)
-            stop_row = restart_data.get("stop_row", None)
-            skip_processed = restart_data.get("skip_processed", False)
+            logger.info(f"Restart campaign {campaign_id} called with data: start_row={restart_data.start_row}, stop_row={restart_data.stop_row}, skip_processed={restart_data.skip_processed}")
+            
+            start_row = restart_data.start_row
+            stop_row = restart_data.stop_row
+            skip_processed = restart_data.skip_processed
             
             # Get the original campaign
             original = campaign_manager.get_campaign(campaign_id)
             if not original:
+                logger.error(f"Campaign {campaign_id} not found")
                 raise HTTPException(status_code=404, detail="Campaign not found")
             
-            if original.status != "COMPLETED":
-                raise HTTPException(status_code=400, detail="Only completed campaigns can be restarted")
+            logger.info(f"Original campaign status: {original.status}")
+            
+            # Allow restarting campaigns that are completed, failed, or cancelled
+            # Note: CampaignStatus uses lowercase values
+            if original.status not in ["completed", "failed", "cancelled", "paused"]:
+                logger.error(f"Campaign {campaign_id} cannot be restarted. Status: {original.status}")
+                raise HTTPException(status_code=400, detail=f"Campaign cannot be restarted. Current status: {original.status}. Only completed, failed, cancelled or paused campaigns can be restarted")
             
             # Create a new campaign with same settings but different start/stop rows
             new_campaign_data = CampaignCreate(
@@ -697,15 +710,13 @@ Generate exactly {count} variations, one per line:"""
                 session_name=original.session_name,
                 file_path=original.file_path,
                 message_mode=original.message_mode,
-                single_template=original.single_template,
                 message_samples=original.message_samples,
                 use_csv_samples=original.use_csv_samples,
                 delay_seconds=original.delay_seconds,
                 retry_attempts=original.retry_attempts,
                 max_daily_messages=original.max_daily_messages,
                 start_row=start_row,
-                end_row=stop_row,  # Add the stop row
-                skip_processed_rows=skip_processed
+                end_row=stop_row  # Add the stop row
             )
             
             # Create the new campaign

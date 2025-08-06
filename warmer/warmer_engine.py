@@ -353,7 +353,22 @@ class WarmerEngine:
                     message_id = str(message_id)
                 
                 # Save contact to WhatsApp after first message
-                recipient_name = recipient_info.get(recipient, {}).get("name", recipient)
+                # Get actual contact info from WAHA instead of using session name
+                try:
+                    contact_info = self.contact_manager.waha.get_contact_info(sender, chat_id)
+                    # Extract contact name from WAHA response
+                    if contact_info and 'name' in contact_info and contact_info['name']:
+                        recipient_name = contact_info['name']
+                    elif contact_info and 'pushname' in contact_info and contact_info['pushname']:
+                        recipient_name = contact_info['pushname']
+                    else:
+                        # Default to "John Doe" if no name available
+                        recipient_name = "John Doe"
+                except Exception as e:
+                    self.logger.warning(f"Could not get contact info from WAHA: {e}")
+                    # Default to "John Doe" on error
+                    recipient_name = "John Doe"
+                
                 await self.contact_manager.save_contact_after_message(
                     session_name=sender,
                     chat_id=chat_id,
